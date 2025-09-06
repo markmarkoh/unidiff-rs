@@ -1,5 +1,5 @@
 [package]
-authors = ["messense <messense@icloud.com>"]
+authors = ["messense <messense@icloud.com>", "mark <mark.dimarco@gmail.com>"]
 description = "Unified diff parsing/metadata extraction library for Rust"
 documentation = "https://messense.github.io/unidiff-rs"
 edition = "2018"

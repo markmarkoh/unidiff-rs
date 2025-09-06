@@ -34,10 +34,14 @@ use std::str::FromStr;
 use regex::Regex;
 
 lazy_static! {
+    static ref RE_DIFF_GIT_HEADER: Regex = Regex::new(r"^diff --git a/(?P<source_file>.+) b/(?P<target_file>.+)").unwrap();
     static ref RE_SOURCE_FILENAME: Regex = Regex::new(r"^--- (?P<filename>[^\t\n]+)(?:\t(?P<timestamp>[^\n]+))?").unwrap();
     static ref RE_TARGET_FILENAME: Regex = Regex::new(r"^\+\+\+ (?P<filename>[^\t\n]+)(?:\t(?P<timestamp>[^\n]+))?").unwrap();
     static ref RE_HUNK_HEADER: Regex = Regex::new(r"^@@ -(?P<source_start>\d+)(?:,(?P<source_length>\d+))? \+(?P<target_start>\d+)(?:,(?P<target_length>\d+))? @@[ ]?(?P<section_header>.*)").unwrap();
     static ref RE_HUNK_BODY_LINE: Regex = Regex::new(r"^(?P<line_type>[- \n\+\\]?)(?P<value>.*)").unwrap();
+    static ref RE_SIMILARITY_INDEX: Regex = Regex::new(r"^similarity index (?P<similarity>\d+)%").unwrap();
+    static ref RE_RENAME_FROM: Regex = Regex::new(r"^rename from (?P<filename>.+)").unwrap();
+    static ref RE_RENAME_TO: Regex = Regex::new(r"^rename to (?P<filename>.+)").unwrap();
 }
 
 /// Diff line is added
@@ -305,6 +309,10 @@ pub struct PatchedFile {
     pub target_file: String,
     /// Target file timestamp
     pub target_timestamp: Option<String>,
+    /// Is this file a rename
+    pub is_rename: bool,
+    /// Similarity index for renames (0-100)
+    pub similarity_index: Option<u8>,
     hunks: Vec<Hunk>,
 }
 
@@ -316,6 +324,8 @@ impl PatchedFile {
             target_file: target_file.into(),
             source_timestamp: None,
             target_timestamp: None,
+            is_rename: false,
+            similarity_index: None,
             hunks: vec![],
         }
     }
@@ -331,12 +341,22 @@ impl PatchedFile {
             target_file: target_file.into(),
             source_timestamp: None,
             target_timestamp: None,
+            is_rename: false,
+            similarity_index: None,
             hunks,
         }
     }
 
     /// Patched file relative path
     pub fn path(&self) -> String {
+        // For renames, prefer the target file (new name)
+        if self.is_rename {
+            if self.target_file.starts_with("b/") {
+                return self.target_file[2..].to_owned();
+            }
+            return self.target_file.clone();
+        }
+
         if self.source_file.starts_with("a/") && self.target_file.starts_with("b/") {
             return self.source_file[2..].to_owned();
         }
@@ -356,10 +376,7 @@ impl PatchedFile {
 
     /// Count of lines removed
     pub fn removed(&self) -> usize {
-        self.hunks
-            .iter()
-            .map(|h| h.removed)
-            .sum::<usize>()
+        self.hunks.iter().map(|h| h.removed).sum::<usize>()
     }
 
     /// Is this file newly added
@@ -374,7 +391,12 @@ impl PatchedFile {
 
     /// Is this file modified
     pub fn is_modified_file(&self) -> bool {
-        !self.is_added_file() && !self.is_removed_file()
+        !self.is_added_file() && !self.is_removed_file() && !self.hunks.is_empty()
+    }
+
+    /// Is this file renamed
+    pub fn is_renamed_file(&self) -> bool {
+        self.is_rename
     }
 
     fn parse_hunk(&mut self, header: &str, diff: &[(usize, &str)]) -> Result<()> {
@@ -584,6 +606,15 @@ impl PatchSet {
             .collect()
     }
 
+    /// Renamed files vector
+    pub fn renamed_files(&self) -> Vec<PatchedFile> {
+        self.files
+            .iter()
+            .filter(|f| f.is_renamed_file())
+            .cloned()
+            .collect()
+    }
+
     /// Initialize a new PatchSet instance
     pub fn new() -> PatchSet {
         PatchSet {
@@ -626,8 +657,26 @@ impl PatchSet {
         let diff: Vec<(usize, &str)> = input.lines().enumerate().collect();
         let mut source_file: Option<String> = None;
         let mut source_timestamp: Option<String> = None;
+        let mut pending_rename_info: Option<(bool, Option<u8>, String, String)> = None; // (is_rename, similarity, from, to)
 
         for &(line_no, line) in &diff {
+            // check for git diff header
+            if let Some(captures) = RE_DIFF_GIT_HEADER.captures(line) {
+                // Save current file if exists
+                if let Some(patched_file) = current_file {
+                    self.files.push(patched_file.clone());
+                }
+
+                // Store git diff info for potential rename-only file
+                let git_source = captures.name("source_file").unwrap().as_str();
+                let _git_target = captures.name("target_file").unwrap().as_str();
+                source_file = Some(format!("a/{}", git_source));
+
+                // Reset current file and pending rename info for new file
+                current_file = None;
+                pending_rename_info = None;
+                continue;
+            }
             // check for source file header
             if let Some(captures) = RE_SOURCE_FILENAME.captures(line) {
                 source_file = match captures.name("filename") {
@@ -659,13 +708,99 @@ impl PatchSet {
                 };
 
                 // add current file to PatchSet
-                current_file = Some(PatchedFile {
+                let mut new_file = PatchedFile {
                     source_file: source_file.clone().unwrap(),
                     target_file: target_file.clone().unwrap(),
                     source_timestamp: source_timestamp.clone(),
                     target_timestamp: target_timestamp.clone(),
+                    is_rename: false,
+                    similarity_index: None,
                     hunks: Vec::new(),
-                });
+                };
+
+                // Apply pending rename info if any
+                if let Some((is_rename, similarity, from, to)) = pending_rename_info.take() {
+                    new_file.is_rename = is_rename;
+                    new_file.similarity_index = similarity;
+                    if !from.is_empty() {
+                        new_file.source_file = format!("a/{}", from);
+                    }
+                    if !to.is_empty() {
+                        new_file.target_file = format!("b/{}", to);
+                    }
+                }
+
+                current_file = Some(new_file);
+                continue;
+            }
+            // check for similarity index
+            if let Some(captures) = RE_SIMILARITY_INDEX.captures(line) {
+                let similarity = captures
+                    .name("similarity")
+                    .unwrap()
+                    .as_str()
+                    .parse::<u8>()
+                    .unwrap_or(0);
+
+                // Store similarity in pending rename info
+                if let Some((ref mut _is_rename, ref mut sim, ref _from, ref _to)) =
+                    pending_rename_info
+                {
+                    *sim = Some(similarity);
+                } else {
+                    pending_rename_info =
+                        Some((false, Some(similarity), String::new(), String::new()));
+                }
+
+                // If we already have a current_file, apply similarity
+                if let Some(ref mut patched_file) = current_file {
+                    patched_file.similarity_index = Some(similarity);
+                }
+                continue;
+            }
+            // check for rename from
+            if let Some(captures) = RE_RENAME_FROM.captures(line) {
+                let rename_from = captures.name("filename").unwrap().as_str().to_owned();
+
+                // Store rename from in pending info
+                if let Some((ref mut is_rename, ref _sim, ref mut from, ref _to)) =
+                    pending_rename_info
+                {
+                    *is_rename = true;
+                    *from = rename_from.clone();
+                } else {
+                    pending_rename_info = Some((true, None, rename_from.clone(), String::new()));
+                }
+
+                // If we already have a current_file, apply rename from
+                if let Some(ref mut patched_file) = current_file {
+                    patched_file.is_rename = true;
+                    patched_file.source_file = format!("a/{}", rename_from);
+                }
+                continue;
+            }
+            // check for rename to
+            if let Some(captures) = RE_RENAME_TO.captures(line) {
+                let rename_to = captures.name("filename").unwrap().as_str().to_owned();
+
+                // Store rename to in pending info
+                if let Some((ref mut is_rename, ref _sim, ref _from, ref mut to)) =
+                    pending_rename_info
+                {
+                    *is_rename = true;
+                    *to = rename_to.clone();
+                } else {
+                    pending_rename_info = Some((true, None, String::new(), rename_to.clone()));
+                }
+
+                // If we have current_file, apply rename to
+                if let Some(ref mut patched_file) = current_file {
+                    patched_file.is_rename = true;
+                    patched_file.target_file = format!("b/{}", rename_to);
+                }
+                // Don't create file immediately - wait to see if we get --- +++ headers
+                // The file will be created either by the target file header handler (for renamed+modified)
+                // or at the end of parsing (for rename-only)
                 continue;
             }
             // check for hunk header
@@ -677,9 +812,28 @@ impl PatchSet {
                 }
             }
         }
+
+        // Handle remaining current_file
         if let Some(patched_file) = current_file {
             self.files.push(patched_file.clone());
         }
+
+        // Handle remaining pending rename-only file
+        if let Some((is_rename, similarity, from, to)) = pending_rename_info {
+            if is_rename && !from.is_empty() && !to.is_empty() && source_file.is_some() {
+                let rename_only_file = PatchedFile {
+                    source_file: format!("a/{}", from),
+                    target_file: format!("b/{}", to),
+                    source_timestamp: None,
+                    target_timestamp: None,
+                    is_rename,
+                    similarity_index: similarity,
+                    hunks: Vec::new(),
+                };
+                self.files.push(rename_only_file);
+            }
+        }
+
         Ok(())
     }
 

@@ -394,3 +394,97 @@ fn test_parse_patchset_from_str() {
     // three hunks
     assert_eq!(3, patch[0].len());
 }
+
+#[test]
+fn test_git_rename_no_change() {
+    let buf = include_str!("fixtures/git-rename-no-change.diff");
+
+    let patch: PatchSet = buf.parse().unwrap();
+
+    // Should have 2 files: one modified and one renamed
+    assert_eq!(2, patch.len());
+
+    // First file should be modified (index.ts with import change)
+    assert_eq!(1, patch[0].len()); // has 1 hunk
+    assert!(patch[0].is_modified_file());
+    assert!(!patch[0].is_renamed_file());
+    assert_eq!("index.ts", patch[0].path());
+
+    // Second file should be renamed (second.ts -> third.ts)
+    assert_eq!(0, patch[1].len()); // no hunks for pure rename
+    assert!(!patch[1].is_modified_file());
+    assert!(patch[1].is_renamed_file());
+    assert_eq!("third.ts", patch[1].path()); // should show new name
+    assert_eq!(Some(100), patch[1].similarity_index); // 100% similarity
+    assert_eq!("a/second.ts", patch[1].source_file);
+    assert_eq!("b/third.ts", patch[1].target_file);
+
+    // Check renamed files
+    let renamed_files = patch.renamed_files();
+    assert_eq!(1, renamed_files.len());
+    assert_eq!("third.ts", renamed_files[0].path());
+}
+
+#[test]
+fn test_git_rename_with_changes() {
+    let buf = include_str!("fixtures/git-rename-with-change.diff");
+
+    let patch: PatchSet = buf.parse().unwrap();
+
+    // Should have 2 files: one renamed with changes, one modified
+    assert_eq!(2, patch.len());
+
+    // First file should be renamed with changes (third.ts -> fourth.ts)
+    assert_eq!(1, patch[0].len()); // has 1 hunk
+    assert!(patch[0].is_modified_file()); // it's both modified and renamed
+    assert!(patch[0].is_renamed_file());
+    assert_eq!("fourth.ts", patch[0].path()); // should show new name
+    assert_eq!(Some(82), patch[0].similarity_index); // 82% similarity
+    assert_eq!("a/third.ts", patch[0].source_file);
+    assert_eq!("b/fourth.ts", patch[0].target_file);
+    assert_eq!(1, patch[0].added());
+    assert_eq!(1, patch[0].removed());
+
+    // Second file should be modified (index.ts with import change)
+    assert_eq!(1, patch[1].len()); // has 1 hunk
+    assert!(patch[1].is_modified_file());
+    assert!(!patch[1].is_renamed_file());
+    assert_eq!("index.ts", patch[1].path());
+
+    // Check renamed files
+    let renamed_files = patch.renamed_files();
+    assert_eq!(1, renamed_files.len());
+    assert_eq!("fourth.ts", renamed_files[0].path());
+}
+
+#[test]
+fn test_git_newfile() {
+    let buf = include_str!("fixtures/git-newfile.diff");
+
+    let patch: PatchSet = buf.parse().unwrap();
+
+    // Should have 1 file: a new file
+    assert_eq!(1, patch.len());
+
+    // File should be added (fifth.ts)
+    assert_eq!(1, patch[0].len()); // has 1 hunk
+    assert!(!patch[0].is_modified_file());
+    assert!(patch[0].is_added_file());
+    assert!(!patch[0].is_removed_file());
+    assert!(!patch[0].is_renamed_file());
+    assert_eq!("fifth.ts", patch[0].path());
+    assert_eq!(1, patch[0].added());
+    assert_eq!(0, patch[0].removed());
+
+    // Check added files
+    let added_files = patch.added_files();
+    assert_eq!(1, added_files.len());
+    assert_eq!("fifth.ts", added_files[0].path());
+    assert_eq!(1, added_files[0].added());
+    assert_eq!(0, added_files[0].removed());
+
+    // Check the content of the added line
+    assert_eq!(1, patch[0][0].len()); // 1 line in the hunk
+    assert_eq!("console.log('five')", patch[0][0][0].value);
+    assert!(patch[0][0][0].is_added());
+}

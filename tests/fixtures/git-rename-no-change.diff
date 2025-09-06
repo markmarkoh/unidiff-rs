@@ -1,0 +1,14 @@
+diff --git a/index.ts b/index.ts
+index e3e378d..f9876e9 100644
+--- a/index.ts
++++ b/index.ts
+@@ -1,4 +1,4 @@
+-import { hello, world } from './second.js';
++import { hello, world } from './third.js';
+ 
+ function main() {
+   const someting = hello();
+diff --git a/second.ts b/third.ts
+similarity index 100%
+rename from second.ts
+rename to third.ts

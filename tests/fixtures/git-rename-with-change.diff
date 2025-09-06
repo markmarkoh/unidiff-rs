@@ -1,0 +1,25 @@
+diff --git a/third.ts b/fourth.ts
+similarity index 82%
+rename from third.ts
+rename to fourth.ts
+index deab0a2..f2d2d2f 100644
+--- a/third.ts
++++ b/fourth.ts
+@@ -4,6 +4,6 @@ export function hello() {
+ 
+ export function world() {
+   hello();
+-  return "world";
++  return "world!";
+ }
+ 
+diff --git a/index.ts b/index.ts
+index f9876e9..bbd2802 100644
+--- a/index.ts
++++ b/index.ts
+@@ -1,4 +1,4 @@
+-import { hello, world } from './third.js';
++import { hello, world } from './fourth.js';
+ 
+ function main() {
+   const someting = hello();
