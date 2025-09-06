@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Unified diff parsing/metadata extraction library for Rust
 //!
 //! # Examples
@@ -39,13 +41,13 @@ lazy_static! {
 }
 
 /// Diff line is added
-pub const LINE_TYPE_ADDED: &'static str = "+";
+pub const LINE_TYPE_ADDED: &str = "+";
 /// Diff line is removed
-pub const LINE_TYPE_REMOVED: &'static str = "-";
+pub const LINE_TYPE_REMOVED: &str = "-";
 /// Diff line is context
-pub const LINE_TYPE_CONTEXT: &'static str = " ";
+pub const LINE_TYPE_CONTEXT: &str = " ";
 /// Diff line is empty
-pub const LINE_TYPE_EMPTY: &'static str = "\n";
+pub const LINE_TYPE_EMPTY: &str = "\n";
 
 /// Error type
 #[derive(Debug, Clone)]
@@ -109,17 +111,17 @@ impl Line {
 
     /// Diff line type is added
     pub fn is_added(&self) -> bool {
-        LINE_TYPE_ADDED == &self.line_type
+        LINE_TYPE_ADDED == self.line_type
     }
 
     /// Diff line type is removed
     pub fn is_removed(&self) -> bool {
-        LINE_TYPE_REMOVED == &self.line_type
+        LINE_TYPE_REMOVED == self.line_type
     }
 
     /// Diff line type is context
     pub fn is_context(&self) -> bool {
-        LINE_TYPE_CONTEXT == &self.line_type
+        LINE_TYPE_CONTEXT == self.line_type
     }
 }
 
@@ -164,10 +166,10 @@ impl Hunk {
         Hunk {
             added: 0usize,
             removed: 0usize,
-            source_start: source_start,
-            source_length: source_length,
-            target_start: target_start,
-            target_length: target_length,
+            source_start,
+            source_length,
+            target_start,
+            target_length,
             section_header: section_header.into(),
             lines: vec![],
             source: vec![],
@@ -194,8 +196,8 @@ impl Hunk {
     pub fn source_lines(&self) -> Vec<Line> {
         self.lines
             .iter()
-            .cloned()
             .filter(|l| l.is_context() || l.is_removed())
+            .cloned()
             .collect()
     }
 
@@ -203,19 +205,19 @@ impl Hunk {
     pub fn target_lines(&self) -> Vec<Line> {
         self.lines
             .iter()
-            .cloned()
             .filter(|l| l.is_context() || l.is_added())
+            .cloned()
             .collect()
     }
 
     /// Append new line into hunk
     pub fn append(&mut self, line: Line) {
         if line.is_added() {
-            self.added = self.added + 1;
+            self.added += 1;
             self.target
                 .push(format!("{}{}", line.line_type, line.value));
         } else if line.is_removed() {
-            self.removed = self.removed + 1;
+            self.removed += 1;
             self.source
                 .push(format!("{}{}", line.line_type, line.value));
         } else if line.is_context() {
@@ -329,7 +331,7 @@ impl PatchedFile {
             target_file: target_file.into(),
             source_timestamp: None,
             target_timestamp: None,
-            hunks: hunks,
+            hunks,
         }
     }
 
@@ -349,7 +351,7 @@ impl PatchedFile {
 
     /// Count of lines added
     pub fn added(&self) -> usize {
-        self.hunks.iter().map(|h| h.added).fold(0, |acc, x| acc + x)
+        self.hunks.iter().map(|h| h.added).sum::<usize>()
     }
 
     /// Count of lines removed
@@ -357,7 +359,7 @@ impl PatchedFile {
         self.hunks
             .iter()
             .map(|h| h.removed)
-            .fold(0, |acc, x| acc + x)
+            .sum::<usize>()
     }
 
     /// Is this file newly added
@@ -406,10 +408,10 @@ impl PatchedFile {
             source: vec![],
             target: vec![],
             lines: vec![],
-            source_start: source_start,
-            source_length: source_length,
-            target_start: target_start,
-            target_length: target_length,
+            source_start,
+            source_length,
+            target_start,
+            target_length,
             section_header: section_header.to_owned(),
         };
         let mut source_line_no = source_start;
@@ -419,7 +421,7 @@ impl PatchedFile {
         for &(diff_line_no, line) in diff {
             if let Some(valid_line) = RE_HUNK_BODY_LINE.captures(line) {
                 let mut line_type = valid_line.name("line_type").unwrap().as_str();
-                if line_type == LINE_TYPE_EMPTY || line_type == "" {
+                if line_type == LINE_TYPE_EMPTY || line_type.is_empty() {
                     line_type = LINE_TYPE_CONTEXT;
                 }
                 let value = valid_line.name("value").unwrap().as_str();
@@ -433,17 +435,17 @@ impl PatchedFile {
                 match line_type {
                     LINE_TYPE_ADDED => {
                         original_line.target_line_no = Some(target_line_no);
-                        target_line_no = target_line_no + 1;
+                        target_line_no += 1;
                     }
                     LINE_TYPE_REMOVED => {
                         original_line.source_line_no = Some(source_line_no);
-                        source_line_no = source_line_no + 1;
+                        source_line_no += 1;
                     }
                     LINE_TYPE_CONTEXT => {
                         original_line.target_line_no = Some(target_line_no);
-                        target_line_no = target_line_no + 1;
+                        target_line_no += 1;
                         original_line.source_line_no = Some(source_line_no);
-                        source_line_no = source_line_no + 1;
+                        source_line_no += 1;
                     }
                     _ => {}
                 }
@@ -559,8 +561,8 @@ impl PatchSet {
     pub fn added_files(&self) -> Vec<PatchedFile> {
         self.files
             .iter()
-            .cloned()
             .filter(|f| f.is_added_file())
+            .cloned()
             .collect()
     }
 
@@ -568,8 +570,8 @@ impl PatchSet {
     pub fn removed_files(&self) -> Vec<PatchedFile> {
         self.files
             .iter()
-            .cloned()
             .filter(|f| f.is_removed_file())
+            .cloned()
             .collect()
     }
 
@@ -577,8 +579,8 @@ impl PatchSet {
     pub fn modified_files(&self) -> Vec<PatchedFile> {
         self.files
             .iter()
-            .cloned()
             .filter(|f| f.is_modified_file())
+            .cloned()
             .collect()
     }
 
